@@ -54,63 +54,74 @@ function generateUUID() {
   });
 }
 
-// Функция для поиска в интернете
+// Функция для поиска в интернете через Perplexity API
 async function searchInternet(query) {
   try {
-    console.log(`Выполняем поиск: ${query}`);
+    console.log(`Выполняем поиск через Perplexity API: ${query}`);
     
-    // Используем DuckDuckGo API через axios
-    const response = await axios.get(`https://api.duckduckgo.com/?q=${encodeURIComponent(query)}&format=json&no_html=1&skip_disambig=1`, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
+         const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+     
+     console.log('Переменные окружения:', {
+       PERPLEXITY_API_KEY: PERPLEXITY_API_KEY ? `Загружен (${PERPLEXITY_API_KEY.substring(0, 10)}...)` : 'Не найден',
+       GIGA_CHAT_TOKEN: process.env.GIGA_CHAT_TOKEN ? `Загружен (${process.env.GIGA_CHAT_TOKEN.substring(0, 10)}...)` : 'Не найден'
+     });
+     
+     if (!PERPLEXITY_API_KEY) {
+       console.error('PERPLEXITY_API_KEY не найден в переменных окружения');
+       return `Ошибка: не настроен API ключ для поиска. Проверьте файл .env и перезапустите сервер.`;
+     }
     
-    const data = response.data;
-    let results = [];
+         // Используем Perplexity API для поиска
+     const response = await axios.post('https://api.perplexity.ai/chat/completions', {
+       model: 'sonar',
+       messages: [
+         {
+           role: 'system',
+           content: 'Ты помощник для поиска актуальной информации в интернете. Отвечай кратко и информативно, включая источники и ссылки когда это возможно.'
+         },
+         {
+           role: 'user',
+           content: `Найди актуальную информацию по запросу: "${query}". Если это поиск о человеке, включи информацию о его профессии, достижениях, текущей деятельности. Если это новости, дай последние события. Ответь на русском языке.`
+         }
+       ],
+       max_tokens: 1000,
+       temperature: 0.2
+     }, {
+       headers: {
+         'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+         'Content-Type': 'application/json'
+       },
+       timeout: 30000
+     });
     
-    // Получаем результаты из разных источников
-    if (data.AbstractText) {
-      results.push(`Краткая информация: ${data.AbstractText}`);
+    if (response.data && response.data.choices && response.data.choices[0]) {
+      const result = response.data.choices[0].message.content;
+      console.log(`Perplexity API ответ получен: ${result.length} символов`);
+      
+      // Добавляем информацию о том, что это результат поиска
+      const finalResult = `🔍 Результаты поиска по запросу "${query}":\n\n${result}`;
+      
+      return finalResult;
+    } else {
+      console.error('Неожиданный формат ответа от Perplexity API:', response.data);
+      return `Не удалось получить результаты поиска по запросу "${query}". Попробуйте переформулировать запрос.`;
     }
     
-    if (data.Answer) {
-      results.push(`Ответ: ${data.Answer}`);
-    }
-    
-    if (data.Definition) {
-      results.push(`Определение: ${data.Definition}`);
-    }
-    
-    if (data.RelatedTopics && data.RelatedTopics.length > 0) {
-      results.push('Связанные темы:');
-      data.RelatedTopics.slice(0, 3).forEach(topic => {
-        if (topic.Text) {
-          results.push(`- ${topic.Text}`);
-        }
-      });
-    }
-    
-    // Также добавляем информацию из Infobox если есть
-    if (data.Infobox && data.Infobox.content && data.Infobox.content.length > 0) {
-      results.push('Дополнительная информация:');
-      data.Infobox.content.slice(0, 3).forEach(item => {
-        if (item.label && item.value) {
-          results.push(`- ${item.label}: ${item.value}`);
-        }
-      });
-    }
-    
-    if (results.length === 0) {
-      // Если ничего не найдено через DuckDuckGo, даем общий ответ
-      results.push(`Поиск по запросу "${query}" не дал конкретных результатов из DuckDuckGo API. Это может означать, что требуется более специфичный запрос или поиск в других источниках.`);
-    }
-    
-    return results.join('\n');
   } catch (error) {
-    console.error('Ошибка поиска в интернете:', error.message);
-    return `Ошибка при поиске в интернете: ${error.message}. Попробуйте переформулировать запрос.`;
+    console.error('Ошибка поиска через Perplexity API:', error.message);
+    
+    if (error.response) {
+      console.error('Ответ API:', error.response.data);
+      
+      if (error.response.status === 401) {
+        return `Ошибка аутентификации API. Проверьте настройки ключа.`;
+      } else if (error.response.status === 429) {
+        return `Превышен лимит запросов API. Попробуйте позже.`;
+      }
+    }
+    
+    // Fallback - базовый ответ
+    return `Ошибка при поиске "${query}": ${error.message}. Попробуйте переформулировать запрос или попросить что-то другое.`;
   }
 }
 
@@ -346,7 +357,10 @@ async function sendToGigaChat(message, conversationHistory = []) {
       },
       httpsAgent: new https.Agent({
         rejectUnauthorized: false
-      })
+      }),
+      timeout: 30000, // 30 секунд таймаут
+      retry: 3, // Повторить до 3 раз
+      retryDelay: 1000 // Задержка между попытками
     });
     
     console.log(`Получен ответ от GigaChat:`, JSON.stringify(response.data, null, 2));
